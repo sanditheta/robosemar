@@ -1,10 +1,9 @@
 import logging
-from utilities.config import Config
+from utilities.config import ConfigurationManager as Config
 from components.cli import CLI
 from components.microphone import Microphone
 from components.recorder import Recorder
 from components.vad import VoiceActivityDetection
-from components.chatbot import Chatbot, DialogflowEngine
 from typing import List, Tuple
 
 
