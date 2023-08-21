@@ -1,0 +1,28 @@
+microphone:
+  channels: 1
+  samplerate: 16000
+  chunk: 8000
+  device_index: 7
+  dtype: float32
+  engine_type: sounddevice
+  sounddevice:
+    stream_type: raw
+recorder:
+  directory: audio/recordings
+  filename: voice.wav
+  duration: 5
+vad:
+  samplerate: 16000
+  engine_type: silero_vad
+  silero_vad:
+    device: cpu
+chatbot:
+  channels: 1
+  samplerate: 16000
+  chunk: 8000
+  language_code: id
+  engine_type: dialogflow
+  dialogflow:
+    project_id: robosemar-skad
+    application_credentials: config/dialogflow_credentials.json
+    synthesized_directory: audio/synthesized/
