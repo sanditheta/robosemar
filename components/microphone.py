@@ -15,6 +15,7 @@ def register_stream(engine: str):
 
     return decorator
 
+
 @register_stream("sounddevice")
 class SounddeviceStream:
     def __init__(self, config: Dict[str, str]):
@@ -25,22 +26,21 @@ class SounddeviceStream:
         self.dtype: str = str(config["dtype"])
         self.stream_type = config["sounddevice"]["stream_type"]
         self.stream_cls = None
-        input_stream_registry = {"raw": sd.RawInputStream,
-                       "numpy": sd.InputStream}
+        input_stream_registry = {"raw": sd.RawInputStream, "numpy": sd.InputStream}
 
         self.stream_cls = input_stream_registry.get(self.stream_type, None)
 
         if self.stream_cls == None:
             raise ValueError(f"Unknown stream type: {self.stream_type}")
-        
+
         self.stream = self.stream_cls(
             channels=self.channels,
             samplerate=self.samplerate,
             device=self.device_index,
             blocksize=self.chunk,
             dtype=self.dtype,
-         )
-        
+        )
+
     def start(self):
         self.stream.start()
 
@@ -51,10 +51,9 @@ class SounddeviceStream:
     def read(self):
         return self.stream.read(self.chunk)
 
+
 class Microphone:
-
     def __init__(self, config: Dict[str, str]) -> None:
-
         self.channels: int = int(config["channels"])
         self.samplerate: int = int(config["samplerate"])
         self.device_index: int = int(config["device_index"])
@@ -72,15 +71,13 @@ class Microphone:
         logger.info("Microphone initialized.")
 
     def read(self) -> Union[Tuple[bytes, bool], Tuple[np.ndarray, bool]]:
-
         frames, overflowed = self.streamer.read()
         logger.debug(f"Frames read from the microphone: {frames}")
         return frames, overflowed
 
     def stop(self) -> None:
-
         if self.streamer is not None:
             self.streamer.stop()
-            #self.streamer.close()
+            # self.streamer.close()
             self.streamer = None
             logger.info("Microphone recording stopped.")

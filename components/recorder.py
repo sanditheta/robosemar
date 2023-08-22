@@ -17,16 +17,19 @@ def register_recording_strategy(engine: str):
     return decorator
 
 
-@register_recording_strategy('raw')
+@register_recording_strategy("raw")
 class RawRecordingStrategy:
     def record(self, microphone: Microphone, duration: int) -> np.ndarray:
         recorded_data = bytearray()
         for _ in range(int(microphone.samplerate * duration / microphone.chunk)):
             frames, _ = microphone.read()
             recorded_data.extend(frames)
-        return np.frombuffer(recorded_data, dtype=np.float32).reshape(-1, microphone.channels)
+        return np.frombuffer(recorded_data, dtype=np.float32).reshape(
+            -1, microphone.channels
+        )
 
-@register_recording_strategy('numpy')
+
+@register_recording_strategy("numpy")
 class NumpyRecordingStrategy:
     def record(self, microphone: Microphone, duration: int) -> np.ndarray:
         frames_list = []
@@ -36,15 +39,18 @@ class NumpyRecordingStrategy:
         recorded_data = np.concatenate(frames_list).reshape(-1, microphone.channels)
         return recorded_data
 
+
 class Recorder:
     def __init__(self, config: Dict[str, str], microphone: Microphone) -> None:
         self.microphone = microphone
-        self.directory: str = config['directory']
-        self.filename: str = config['filename']
-        self.duration: int = int(config['duration'])
-        
+        self.directory: str = config["directory"]
+        self.filename: str = config["filename"]
+        self.duration: int = int(config["duration"])
+
         # Use the registry to fetch the appropriate stream factory
-        strategy_class = RECORDING_STRATEGY_REGISTRY.get(self.microphone.stream_type, None)
+        strategy_class = RECORDING_STRATEGY_REGISTRY.get(
+            self.microphone.stream_type, None
+        )
         if strategy_class is None:
             raise ValueError(f"Unknown strategy name: {self.microphone.stream_type}")
         self.strategy = strategy_class()

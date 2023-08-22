@@ -2,28 +2,51 @@ import numpy as np
 import logging
 import torch
 from components.microphone import Microphone
+from components.monitor import Observer, register_observers,remove_observers,notify_observers
 from utilities.utils_vad import utils
-from typing import Dict, List, Tuple, Callable, Union
+from utilities.utils_numpy import convert_frames_to_numpy
+from typing import Dict, List, Tuple, Callable, Union, Optional
+from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
+# SileroVAD implementation
+
+
 # Strategy Registry
-VAD_ENGINE_REGISTRY = {}
+class VADEngineRegistry:
+    _engines = {}
+
+    @classmethod
+    def register_engine(cls, engine_name: str):
+        def decorator(engine_cls):
+            cls._engines[engine_name] = engine_cls
+            return engine_cls
+
+        return decorator
+
+    @classmethod
+    def get_engine(cls, engine_name: str):
+        return cls._engines.get(engine_name)
 
 
-# Register Decorator
-def register_vad_engine(engine: str):
-    def decorator(cls):
-        VAD_ENGINE_REGISTRY[engine] = cls
-        return cls
-
-    return decorator
+# VADEngine Interface
 
 
-@register_vad_engine("silero_vad")
-class SileroVAD:
+class VADEngine(ABC):
+    @abstractmethod
+    def infer_chunk(self, chunk: np.ndarray) -> Dict[str, Union[int, float]]:
+        pass
+
+    @abstractmethod
+    def detect_voice(self, mic: Microphone) -> Tuple[Union[str, bool], int]:
+        pass
+
+
+@VADEngineRegistry.register_engine("silero_vad")
+class SileroVAD(VADEngine):
     def __init__(self, config: Dict[str, str]) -> None:
-        self.device: torch.device = torch.device(config["device"])
+        self.device: torch.device = torch.device(config.get("device"))
         logger.debug("load silero")
         self.model, _ = torch.hub.load(
             repo_or_dir="snakers4/silero-vad",
@@ -43,7 +66,7 @@ class SileroVAD:
             model=self.model
         )  # Initializing VADIterator with the loaded model
 
-    def detect_voice(self, chunk: np.ndarray) -> Dict[str, Union[int, float]]:
+    def infer_chunk(self, chunk: np.ndarray) -> Dict[str, Union[int, float]]:
         waveform: torch.Tensor = torch.from_numpy(chunk).float()
         waveform = torch.reshape(waveform, (1, len(waveform)))
         result = self.vad_iterator(
@@ -51,72 +74,68 @@ class SileroVAD:
         )  # Using VADIterator instance
         return result
 
+    def detect_voice(self, mic: Microphone) -> Tuple[Union[str, bool], int]:
+        frames, overflowed = mic.read()
+        logger.debug(f"frames type: {type(frames)}")
+
+        frames = convert_frames_to_numpy(frames)
+
+        labels: Union[Tuple[str, int], Tuple[bool, int]] = self.infer_chunk(frames)
+        status: Union[str, bool]
+        timestamp: int
+        status, timestamp = labels
+        logger.debug(f"Speech labels: {labels}")
+
+        if status:
+            logger.debug(f"{status} at {timestamp} seconds")
+            return status, timestamp
+        if overflowed:
+            logger.warning("Audio buffer overflowed. Some data may be lost.")
+        return status, timestamp
+
 
 class VoiceActivityDetection:
     """
-    Class responsible for Voice Activity Detection (VAD) using the snakers4/silero-vad library.
+    Class responsible for Voice Activity Detection (VAD) using a given VAD engine.
+    Implements the Subject interface to notify observers of detected voice activity.
     """
 
-    def __init__(self, config: Dict[str, str], microphone: Microphone) -> None:
+    def __init__(self, vad_engine: VADEngine, microphone: Microphone) -> None:
         self.microphone = microphone
-        self.sampling_rate: int = int(config["samplerate"])
-        self.buffer: List[np.ndarray] = []
-        self.engine_type: str = str(config["engine_type"])
-        self.total_samples_processed = 0
-        vad_engine_cls = VAD_ENGINE_REGISTRY.get(self.engine_type)
-        self.vad_engine = vad_engine_cls(config[self.engine_type])
+        self.vad_engine = vad_engine
+        self._observers: List[Observer] = []
 
-    def _convert_frames_to_numpy(self, frames: Union[bytes, np.ndarray]) -> np.ndarray:
-        if self.microphone.stream_type == "raw":
-            return np.frombuffer(frames, dtype=np.float32)
-        elif self.microphone.stream_type == "numpy":
-            return frames
-        else:
-            raise ValueError(f"Unsupported stream type: {self.microphone.stream_type}")
+    def register_observers(self, observers: Union[Observer, List[Observer]]) -> None:
+        register_observers(self, observers)
 
-    def one_time_vad(self) -> None:
+    def remove_observers(self, observers: Union[Observer, List[Observer]]) -> None:
+        remove_observers(self, observers)
+
+    def notify_observers(self, status: Union[str, bool], timestamp: int) -> None:
+        notify_observers(self, status, timestamp)
+
+    def one_time_vad(self, observers: List[Observer] = []) -> None:
+        self.register_observers(observers)
         status = False
-
         while not status:
-            frames, overflowed = self.microphone.read()
-            logger.debug(f"frames type: {type(frames)}")
-
-            if self.microphone.stream_type == "raw":
-                frames: np.ndarray = self._convert_frames_to_numpy(frames)
-
-            labels: Union[
-                Tuple[str, int], Tuple[bool, int]
-            ] = self.vad_engine.detect_voice(frames)
-            status: Union[str, bool]
-            timestamp: int
-            status, timestamp = labels
-            logger.debug(f"Speech labels: {labels}")
-
+            status, timestamp = self.vad_engine.detect_voice(self.microphone)
             if status:
-                logger.info(f"{status} at {timestamp} seconds")
-                # callback(timestamps)
-            if overflowed:
-                logger.warning("Audio buffer overflowed. Some data may be lost.")
+                self.notify_observers(status, timestamp)
 
-    def monitor_voice(self, callback: Callable[[List[Tuple[int, int]]], None] = None) -> None:
+    def monitor_voice(self, observers: List[Observer] = []) -> None:
+        self.register_observers(observers)
         logger.info("Monitoring voice activity. Press Ctrl+C to stop.")
         while True:
-            frames, overflowed = self.microphone.read()
-            logger.debug(f"frames type: {type(frames)}")
-
-            if self.microphone.stream_type == "raw":
-                frames: np.ndarray = self._convert_frames_to_numpy(frames)
-
-            labels: Union[
-                Tuple[str, int], Tuple[bool, int]
-            ] = self.vad_engine.detect_voice(frames)
-            status: Union[str, bool]
-            timestamp: int
-            status, timestamp = labels
-            logger.debug(f"Speech labels: {labels}")
-
+            status, timestamp = self.vad_engine.detect_voice(self.microphone)
             if status:
-                logger.info(f"{status} at {timestamp} seconds")
-                # callback(timestamps)
-            if overflowed:
-                logger.warning("Audio buffer overflowed. Some data may be lost.")
+                self.notify_observers(status, timestamp)
+
+
+class VADEngineFactory:
+    @staticmethod
+    def build(config: Dict[str, str]) -> VADEngine:
+        engine_type = config.get("engine_type")
+        engine_class = VADEngineRegistry.get_engine(engine_type)
+        if not engine_class:
+            raise ValueError(f"Unknown VAD engine type: {engine_type}")
+        return engine_class(config.get(engine_type, {}))
